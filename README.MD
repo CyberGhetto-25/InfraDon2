@@ -1,0 +1,3 @@
+Welcome on the InfraDon2 repository by @CyberGhetto-25
+
+Our data infrastructure ingests raw data from multiple sources (APIs, databases, and streaming events) into a centralized data lake. Automated ETL pipelines transform and enrich that data, then load curated datasets into a data warehouse optimized for analytics. Kubernetes-managed processing jobs and workflow orchestration ensure scalable, reliable processing while monitoring and alerting track system health and data quality. Access controls, dataset versioning, and a metadata catalog provide governance and make data discoverable and secure for analysts and applications.
