@@ -17,6 +17,84 @@
             "age": 22,
             "affiliation": "Rebel Alliance",
             "lightsaber": false
+        },
+        {
+            "name": "Han Solo",
+            "age": 32,
+            "affiliation": "Rebel Alliance",
+            "lightsaber": false
+        },
+        {
+            "name": "Chewbacca",
+            "age": 200,
+            "affiliation": "Rebel Alliance",
+            "lightsaber": false
+        },
+        {
+            "name": "Obi-Wan Kenobi",
+            "age": 57,
+            "affiliation": "Jedi Order",
+            "lightsaber": true
+        },
+        {
+            "name": "Yoda",
+            "age": 900,
+            "affiliation": "Jedi Order",
+            "lightsaber": true
+        },
+        {
+            "name": "Emperor Palpatine",
+            "age": 82,
+            "affiliation": "Galactic Empire",
+            "lightsaber": true
+        },
+        {
+            "name": "Boba Fett",
+            "age": 35,
+            "affiliation": "Bounty Hunter",
+            "lightsaber": false
+        },
+        {
+            "name": "R2-D2",
+            "age": 66,
+            "affiliation": "Rebel Alliance",
+            "lightsaber": false
+        },
+        {
+            "name": "C-3PO",
+            "age": 66,
+            "affiliation": "Rebel Alliance",
+            "lightsaber": false
+        },
+        {
+            "name": "Kylo Ren",
+            "age": 29,
+            "affiliation": "First Order",
+            "lightsaber": true
+        },
+        {
+            "name": "Rey",
+            "age": 20,
+            "affiliation": "Resistance",
+            "lightsaber": true
+        },
+        {
+            "name": "Finn",
+            "age": 23,
+            "affiliation": "Resistance",
+            "lightsaber": false
+        },
+        {
+            "name": "Poe Dameron",
+            "age": 32,
+            "affiliation": "Resistance",
+            "lightsaber": false
+        },
+        {
+            "name": "Ahsoka Tano",
+            "age": 35,
+            "affiliation": "Jedi Order",
+            "lightsaber": true
         }
     ],
     "planets": [
@@ -34,6 +112,56 @@
             "name": "Hoth",
             "population": "0",
             "affiliation": "Neutral"
+        },
+        {
+            "name": "Alderaan",
+            "population": "2 billion",
+            "affiliation": "Galactic Republic"
+        },
+        {
+            "name": "Endor",
+            "population": "30 million",
+            "affiliation": "Neutral"
+        },
+        {
+            "name": "Naboo",
+            "population": "4.5 billion",
+            "affiliation": "Galactic Republic"
+        },
+        {
+            "name": "Mustafar",
+            "population": "unknown",
+            "affiliation": "Galactic Empire"
+        },
+        {
+            "name": "Dagobah",
+            "population": "unknown",
+            "affiliation": "Neutral"
+        },
+        {
+            "name": "Jakku",
+            "population": "150,000",
+            "affiliation": "Outer Rim Territories"
+        },
+        {
+            "name": "Kamino",
+            "population": "1 million",
+            "affiliation": "Galactic Republic"
+        },
+        {
+            "name": "Kashyyyk",
+            "population": "45 million",
+            "affiliation": "Rebel Alliance"
+        },
+        {
+            "name": "Bespin",
+            "population": "6 million",
+            "affiliation": "Cloud City Administration"
+        },
+        {
+            "name": "Geonosis",
+            "population": "100 million",
+            "affiliation": "Separatist Alliance"
         }
     ]
 }
