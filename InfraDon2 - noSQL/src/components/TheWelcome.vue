@@ -19,6 +19,7 @@ const docs = ref<InfradonDoc[]>([])
 const formTitle = ref('')
 const formDescription = ref('')
 const selectedDoc = ref<InfradonDoc | null>(null)
+const deletingIds = ref<Set<string>>(new Set())
 
 // --- Connexion à la base
 const initDatabase = () => {
@@ -55,7 +56,7 @@ const createDoc = () => {
       'Lorem ipsum dolor sit amet, généré automatiquement pour test.',
     created_at: new Date().toISOString(),
     status: 'draft',
-    author: 'bro'
+    author: 'Marc Bridy'
   }
 
   storage.value
@@ -102,6 +103,38 @@ const updateDoc = () => {
     .catch((err: any) => console.error('❌ Erreur update doc:', err))
 }
 
+// --- Supprimer un doc (DELETE)
+const deleteDoc = async (doc: InfradonDoc) => {
+  if (!storage.value) return
+  if (!doc._id || !doc._rev) {
+    console.warn('Doc sans _id/_rev, impossible de supprimer')
+    return
+  }
+
+  const ok = window.confirm(`Supprimer définitivement « ${doc.title} » ?`)
+  if (!ok) return
+
+  try {
+    deletingIds.value.add(doc._id)
+
+    // Nettoyer le formulaire si c'était le doc en cours d’édition
+    if (selectedDoc.value?._id === doc._id) {
+      selectedDoc.value = null
+      formTitle.value = ''
+      formDescription.value = ''
+    }
+
+    await storage.value.remove(doc._id, doc._rev)
+    console.log('🗑️ Document supprimé:', doc._id)
+    await fetchData()
+  } catch (err) {
+    console.error('❌ Erreur suppression doc:', err)
+    alert('Erreur lors de la suppression. Regarde la console pour les détails.')
+  } finally {
+    deletingIds.value.delete(doc._id)
+  }
+}
+
 // --- Lifecycle
 onMounted(() => {
   console.log('=> Composant initialisé')
@@ -112,7 +145,7 @@ onMounted(() => {
 
 <template>
   <div style="padding: 2rem;">
-    <h1>📦 Gestion des documents Infradon</h1>
+    <h1>📦 Gestion des documents Infradon2</h1>
 
     <!-- Formulaire -->
     <section style="margin-top: 1.5rem; margin-bottom: 2rem;">
@@ -164,7 +197,21 @@ onMounted(() => {
             Créé le: {{ new Date(doc.created_at).toLocaleString() }}
           </small>
         </p>
-        <button @click="selectDoc(doc)" style="padding:0.3rem 0.8rem;">✏️ Modifier</button>
+
+        <button
+          @click="selectDoc(doc)"
+          style="padding:0.3rem 0.8rem;margin-right:0.4rem;"
+        >
+          ✏️ Modifier
+        </button>
+
+        <button
+          @click="deleteDoc(doc)"
+          :disabled="deletingIds.has(doc._id!)"
+          style="padding:0.3rem 0.8rem;"
+        >
+          {{ deletingIds.has(doc._id!) ? '… Suppression' : '🗑️ Supprimer' }}
+        </button>
       </div>
     </section>
   </div>
