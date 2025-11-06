@@ -21,12 +21,43 @@ const formDescription = ref('')
 const selectedDoc = ref<InfradonDoc | null>(null)
 const deletingIds = ref<Set<string>>(new Set())
 
+
+
 // --- Connexion à la base
 const initDatabase = () => {
-  console.log('=> Connexion à la base de données')
-  const db = new PouchDB<InfradonDoc>('http://admin:admin@localhost:5984/test_infradon2')
-  storage.value = db
-  console.log('✅ Connecté à CouchDB :', db.name)
+   console.log('=> Connexion à la base locale + distante avec réplication')
+
+  // 1️⃣ Base locale (dans le navigateur)
+  const localDB = new PouchDB<InfradonDoc>('test_infradon2_local')
+
+  // 2️⃣ Base distante (CouchDB)
+  const remoteDB = new PouchDB<InfradonDoc>(
+    'http://admin:admin@127.0.0.1:5984/test_infradon2'
+  )
+
+  // 3️⃣ Première réplication descendante (remote → local)
+  localDB
+    .replicate.from(remoteDB)
+    .on('complete', () => {
+      console.log('✅ Initial pull terminé (remote → local)')
+    })
+    .on('error', (err) => console.error('❌ Erreur initial pull:', err))
+
+  // 4️⃣ Synchronisation bidirectionnelle continue (local ⇄ remote)
+  localDB
+    .sync(remoteDB, { live: true, retry: true })
+    .on('change', (info) => {
+      console.log('🔄 Sync change', info)
+    })
+    .on('paused', (err) => {
+      if (err) console.warn('⏸️ Sync paused (err)', err)
+    })
+    .on('active', () => console.log('▶️ Sync active'))
+    .on('error', (err) => console.error('❌ Sync error:', err))
+
+  // 5️⃣ On conserve la base locale pour le CRUD existant
+  storage.value = localDB
+  console.log('✅ Base locale prête et synchronisée avec CouchDB')
 }
 
 // --- Récupération des docs
