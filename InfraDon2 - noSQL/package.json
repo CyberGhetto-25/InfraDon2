@@ -18,12 +18,14 @@
   "dependencies": {
     "events": "^3.3.0",
     "pouchdb": "^9.0.0",
+    "pouchdb-find": "^9.0.0",
     "vue": "^3.5.22"
   },
   "devDependencies": {
     "@tsconfig/node22": "^22.0.2",
     "@types/node": "^22.18.6",
     "@types/pouchdb": "^6.4.2",
+    "@types/pouchdb-find": "^7.3.3",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/eslint-config-prettier": "^10.2.0",
     "@vue/eslint-config-typescript": "^14.6.0",

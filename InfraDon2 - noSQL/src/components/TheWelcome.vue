@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import PouchDB from 'pouchdb'
+import PouchDBFind from 'pouchdb-find'
+
+PouchDB.plugin(PouchDBFind)
+
 
 // --- Type du document
 interface InfradonDoc {
@@ -20,12 +24,12 @@ const formTitle = ref('')
 const formDescription = ref('')
 const selectedDoc = ref<InfradonDoc | null>(null)
 const deletingIds = ref<Set<string>>(new Set())
-
+const searchTerm = ref('')
 
 
 // --- Connexion à la base
 const initDatabase = () => {
-   console.log('=> Connexion à la base locale + distante avec réplication')
+  console.log('=> Connexion à la base locale + distante avec réplication')
 
   // 1️⃣ Base locale (dans le navigateur)
   const localDB = new PouchDB<InfradonDoc>('test_infradon2_local')
@@ -58,6 +62,7 @@ const initDatabase = () => {
   // 5️⃣ On conserve la base locale pour le CRUD existant
   storage.value = localDB
   console.log('✅ Base locale prête et synchronisée avec CouchDB')
+  createIndexes()
 }
 
 // --- Récupération des docs
@@ -172,42 +177,87 @@ onMounted(() => {
   initDatabase()
   fetchData()
 })
+
+const createIndexes = async () => {
+  if (!storage.value) return
+
+  console.log('=> Création de l’index sur "title"...')
+
+  try {
+    // @ts-ignore si TS râle, ou cast en any
+    await (storage.value as any).createIndex({
+      index: {
+        fields: ['title'] // on indexe le champ "title"
+      }
+    })
+    console.log('✅ Index "title" créé / déjà existant')
+  } catch (err) {
+    console.error('❌ Erreur création index:', err)
+  }
+}
+
+const searchDocs = async () => {
+  if (!storage.value) return
+
+  const term = searchTerm.value.trim()
+
+  // Si la recherche est vide → on revient au comportement normal
+  if (!term) {
+    fetchData()
+    return
+  }
+
+  console.log('=> Recherche via index sur "title" avec :', term)
+
+  try {
+    // @ts-ignore ou cast any
+    const res = await (storage.value as any).find({
+      selector: {
+        // Ici on fait une recherche "contient" simple en regex
+        title: { $regex: term }
+      },
+      sort: ['title'] // on utilise le champ indexé pour trier
+    })
+
+    docs.value = res.docs as InfradonDoc[]
+    console.log('✅ Résultats trouvés :', docs.value.length)
+  } catch (err) {
+    console.error('❌ Erreur recherche indexée:', err)
+  }
+}
+
 </script>
 
 <template>
   <div style="padding: 2rem;">
     <h1>📦 Gestion des documents Infradon2</h1>
 
+    <!-- Recherche -->
+    <section style="margin-bottom: 1.5rem;">
+      <h2>🔍 Recherche par titre</h2>
+      <input type="text" v-model="searchTerm" @input="searchDocs" placeholder="Tape un titre ou une partie"
+        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;" />
+      <button @click="() => { searchTerm = ''; fetchData(); }" style="padding:0.3rem 0.8rem;">
+        🔄 Réinitialiser
+      </button>
+    </section>
+
     <!-- Formulaire -->
     <section style="margin-top: 1.5rem; margin-bottom: 2rem;">
       <h2>{{ selectedDoc ? '✏️ Modifier un document' : '➕ Créer un document' }}</h2>
-      <input
-        type="text"
-        v-model="formTitle"
-        placeholder="Titre"
-        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;"
-      />
-      <textarea
-        v-model="formDescription"
-        placeholder="Description"
-        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;height:80px;"
-      ></textarea>
+      <input type="text" v-model="formTitle" placeholder="Titre"
+        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;" />
+      <textarea v-model="formDescription" placeholder="Description"
+        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;height:80px;"></textarea>
 
-      <button
-        @click="selectedDoc ? updateDoc() : createDoc()"
-        style="padding:0.5rem 1rem;margin-right:0.5rem;"
-      >
+      <button @click="selectedDoc ? updateDoc() : createDoc()" style="padding:0.5rem 1rem;margin-right:0.5rem;">
         {{ selectedDoc ? '💾 Mettre à jour' : '📤 Créer' }}
       </button>
-      <button
-        v-if="selectedDoc"
-        @click="
-          selectedDoc = null;
-          formTitle = '';
-          formDescription = '';
-        "
-        style="padding:0.5rem 1rem;"
-      >
+      <button v-if="selectedDoc" @click="
+        selectedDoc = null;
+      formTitle = '';
+      formDescription = '';
+      " style="padding:0.5rem 1rem;">
         ❌ Annuler
       </button>
     </section>
@@ -215,11 +265,8 @@ onMounted(() => {
     <!-- Liste des documents -->
     <section>
       <h2>🗂️ Liste des documents</h2>
-      <div
-        v-for="doc in docs"
-        :key="doc._id"
-        style="border:1px solid #555;border-radius:8px;padding:1rem;margin-bottom:1rem;"
-      >
+      <div v-for="doc in docs" :key="doc._id"
+        style="border:1px solid #555;border-radius:8px;padding:1rem;margin-bottom:1rem;">
         <h3>{{ doc.title }}</h3>
         <p>{{ doc.description }}</p>
         <p>
@@ -229,18 +276,11 @@ onMounted(() => {
           </small>
         </p>
 
-        <button
-          @click="selectDoc(doc)"
-          style="padding:0.3rem 0.8rem;margin-right:0.4rem;"
-        >
+        <button @click="selectDoc(doc)" style="padding:0.3rem 0.8rem;margin-right:0.4rem;">
           ✏️ Modifier
         </button>
 
-        <button
-          @click="deleteDoc(doc)"
-          :disabled="deletingIds.has(doc._id!)"
-          style="padding:0.3rem 0.8rem;"
-        >
+        <button @click="deleteDoc(doc)" :disabled="deletingIds.has(doc._id!)" style="padding:0.3rem 0.8rem;">
           {{ deletingIds.has(doc._id!) ? '… Suppression' : '🗑️ Supprimer' }}
         </button>
       </div>
