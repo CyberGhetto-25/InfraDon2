@@ -425,112 +425,153 @@ onMounted(() => {
 </script>
 
 <template>
-  <div style="padding: 2rem;">
+  <main class="container">
     <h1>Gestion des documents Infradon2</h1>
 
-    <button @click="toggleOffline" style="padding:0.4rem 0.8rem;margin-bottom:1rem;">
+    <button type="button" @click="toggleOffline">
       {{ isOffline ? 'offline' : 'online' }}
     </button>
+
     <!-- recherche -->
-    <section style="margin-bottom: 1.5rem;">
+    <section>
       <h2>Recherche par titre</h2>
-      <input type="text" v-model="searchTerm" @input="searchDocs" placeholder="tape un titre ou une partie"
-        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;" />
-      <button @click="resetSearch" style="padding:0.3rem 0.8rem;">
-        Réinitialiser
-      </button>
-      <button @click="sortByLikesDesc" style="padding:0.3rem 0.8rem;margin-left:0.5rem;">
-        Trier par like
-      </button>
+      <form @submit.prevent>
+        <div class="grid">
+          <label>
+            Titre
+            <input type="search" v-model="searchTerm" @input="searchDocs" placeholder="tape un titre ou une partie" />
+          </label>
+
+          <div>
+            <label>&nbsp;</label>
+            <div class="grid">
+              <button type="button" @click="resetSearch">
+                Réinitialiser
+              </button>
+              <button type="button" @click="sortByLikesDesc">
+                Trier par like
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
     </section>
 
     <!-- Button Factory -->
-    <button @click="generateFakeDocs(20)" style="padding:0.4rem 0.8rem;margin-top:1rem;background:#444;color:white;">
-      Générer 20 documents
-    </button>
+    <section>
+      <button type="button" @click="generateFakeDocs(20)">
+        Générer 20 documents
+      </button>
+    </section>
 
     <!-- formulaire -->
-    <section style="margin-top: 1.5rem; margin-bottom: 2rem;">
+    <section>
       <h2>{{ selectedDoc ? 'Modifier un document' : 'Créer un document' }}</h2>
 
-      <input type="text" v-model="formTitle" placeholder="titre"
-        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;" />
+      <form @submit.prevent="selectedDoc ? updateDoc() : createDoc()">
+        <label>
+          Titre
+          <input type="text" v-model="formTitle" placeholder="titre" />
+        </label>
 
-      <textarea v-model="formDescription" placeholder="description"
-        style="display:block;margin:0.5rem 0;padding:0.5rem;width:300px;height:80px;"></textarea>
+        <label>
+          Description
+          <textarea v-model="formDescription" placeholder="description" rows="3"></textarea>
+        </label>
 
-      <button @click="selectedDoc ? updateDoc() : createDoc()" style="padding:0.5rem 1rem;margin-right:0.5rem;">
-        {{ selectedDoc ? 'Mettre à jour' : 'Créer' }}
-      </button>
+        <div class="grid">
+          <button type="submit">
+            {{ selectedDoc ? 'Mettre à jour' : 'Créer' }}
+          </button>
 
-      <button v-if="selectedDoc" @click="
-        selectedDoc = null;
-      formTitle = '';
-      formDescription = '';
-      " style="padding:0.5rem 1rem;">
-        Annuler
-      </button>
+          <button v-if="selectedDoc" type="button" @click="selectedDoc = null; formTitle = ''; formDescription = ''">
+            Annuler
+          </button>
+        </div>
+      </form>
     </section>
 
     <!-- liste des docs -->
     <section>
       <h2>Liste des documents</h2>
-      <div v-for="doc in docs" :key="doc._id"
-        style="border:1px solid #555;border-radius:8px;padding:1rem;margin-bottom:1rem;">
-        <h3>{{ doc.title }}</h3>
-        <p>{{ doc.description }}</p>
-        <p>
-          <small>
-            auteur: {{ doc.author }} |
-            status: {{ doc.status }} |
-            créé le: {{ new Date(doc.created_at).toLocaleString() }}
-          </small>
-        </p>
 
-        <!-- like -->
-        <p style="margin:0.5rem 0;">
-          <button @click="likeDoc(doc)" style="padding:0.2rem 0.6rem;margin-right:0.5rem;">
-            Like ({{ doc.likes || 0 }})
-          </button>
-        </p>
+      <div class="docs-grid" v-if="docs.length">
+        <article v-for="doc in docs" :key="doc._id">
+          <header>
+            <h3>{{ doc.title }}</h3>
+            <p>{{ doc.description }}</p>
+            <small>
+              auteur: {{ doc.author }} |
+              status: {{ doc.status }} |
+              créé le: {{ new Date(doc.created_at).toLocaleString() }}
+            </small>
+          </header>
 
-        <!-- commentaires existants -->
-        <div v-if="doc.comments && doc.comments.length" style="margin-top:0.5rem;">
-          <p><strong>Commentaires:</strong></p>
-          <ul>
-            <li v-for="c in doc.comments" :key="c.id" style="margin-bottom:0.3rem;">
-              <span>{{ c.text }}</span>
-              <small> ({{ c.author }})</small>
-              <button @click="editComment(doc, c)" style="margin-left:0.5rem;padding:0.1rem 0.4rem;">
-                Modifier
+          <p>
+            <button type="button" @click="likeDoc(doc)">
+              Like ({{ doc.likes || 0 }})
+            </button>
+          </p>
+
+          <div v-if="doc.comments && doc.comments.length">
+            <p><strong>Commentaires:</strong></p>
+
+            <!-- premier commentaire -->
+            <section>
+              <h4>Premier commentaire</h4>
+              <blockquote>
+                <p>{{ doc.comments![0].text }}</p>
+                <footer>
+                  {{ doc.comments![0].author }}
+                  ·
+                  {{ new Date(doc.comments![0].created_at).toLocaleString() }}
+                </footer>
+              </blockquote>
+            </section>
+
+            <details>
+              <summary>Tous les commentaires ({{ doc.comments.length }})</summary>
+              <ul>
+                <li v-for="c in doc.comments" :key="c.id">
+                  <span>{{ c.text }}</span>
+                  <small> ({{ c.author }})</small>
+                  <button type="button" @click="editComment(doc, c)">
+                    Modifier
+                  </button>
+                  <button type="button" @click="deleteComment(doc, c.id)">
+                    Supprimer
+                  </button>
+                </li>
+              </ul>
+            </details>
+          </div>
+
+          <div>
+            <form @submit.prevent="addComment(doc)">
+              <label>
+                Commentaire
+                <input type="text" :placeholder="'Ajouter un commentaire sur ' + doc.title"
+                  v-model="commentDrafts[doc._id!]" />
+              </label>
+              <button type="submit">
+                Envoyer
               </button>
-              <button @click="deleteComment(doc, c.id)" style="margin-left:0.3rem;padding:0.1rem 0.4rem;">
-                Supprimer
-              </button>
-            </li>
-          </ul>
-        </div>
+            </form>
+          </div>
 
-        <!-- ajout d un com -->
-        <div style="margin-top:0.5rem;">
-          <input type="text" :placeholder="'Ajouter un commentaire sur ' + doc.title" v-model="commentDrafts[doc._id!]"
-            style="width:100%;padding:0.3rem;margin-bottom:0.3rem;" />
-          <button @click="addComment(doc)" style="padding:0.3rem 0.8rem;">
-            Envoyer
-          </button>
-        </div>
+          <footer class="grid">
+            <button type="button" @click="selectDoc(doc)">
+              Modifier
+            </button>
 
-        <!-- boutons doc -->
-        <div style="margin-top:0.8rem;">
-          <button @click="selectDoc(doc)" style="padding:0.3rem 0.8rem;margin-right:0.4rem;">
-            Modifier
-          </button>
-
-          <button @click="deleteDoc(doc)" :disabled="deletingIds.has(doc._id!)" style="padding:0.3rem 0.8rem;">
-            {{ deletingIds.has(doc._id!) ? 'Suppression...' : 'Supprimer' }}
-          </button>
-        </div>
+            <button type="button" @click="deleteDoc(doc)" :disabled="deletingIds.has(doc._id!)">
+              {{ deletingIds.has(doc._id!) ? 'Suppression...' : 'Supprimer' }}
+            </button>
+          </footer>
+        </article>
       </div>
+
+      <p v-else>Aucun document pour l’instant.</p>
     </section>
-  </div>
+  </main>
 </template>
