@@ -17,6 +17,7 @@ interface CommentDoc {
 interface InfradonDoc {
   _id?: string
   _rev?: string
+  type?: 'document'
   title: string
   description: string
   created_at: string
@@ -26,11 +27,22 @@ interface InfradonDoc {
   comments?: CommentDoc[]
 }
 
+// category
+interface CategoryDoc {
+  _id?: string
+  _rev?: string
+  type: 'category'
+  name: string
+  created_at: string
+}
+
 // refs pour la bd + ui
 const storage = ref<any>(null) // osef des types generiques ici
 const docs = ref<InfradonDoc[]>([])
 const formTitle = ref('')
 const formDescription = ref('')
+const categories = ref<CategoryDoc[]>([])
+const newCategoryName = ref('')
 const selectedDoc = ref<InfradonDoc | null>(null)
 const deletingIds = ref<Set<string>>(new Set())
 const searchTerm = ref('')
@@ -91,10 +103,19 @@ const fetchData = () => {
   storage.value
     .allDocs({ include_docs: true })
     .then((res: any) => {
-      docs.value = res.rows
+      const allDocs = res.rows
         .filter((r: any) => r.doc && !String(r.id).startsWith('_design/'))
-        .map((r: any) => r.doc as InfradonDoc)
-      console.log('nb docs:', docs.value.length)
+        .map((r: any) => r.doc as any)
+
+      docs.value = allDocs.filter(
+        (d: any) => !d.type || d.type === 'document'
+      ) as InfradonDoc[]
+
+      categories.value = allDocs.filter(
+        (d: any) => d.type === 'category'
+      ) as CategoryDoc[]
+
+      console.log('nb docs:', docs.value.length, ' | nb categories:', categories.value.length)
     })
     .catch((err: any) => {
       console.error('err fetchData', err)
@@ -106,6 +127,7 @@ const createDoc = () => {
   if (!storage.value) return
 
   const newDoc: InfradonDoc = {
+    type: 'document',
     title: formTitle.value || ('doc ' + Date.now()),
     description: formDescription.value || 'test auto infradon2',
     created_at: new Date().toISOString(),
@@ -209,7 +231,12 @@ const createIndexes = async () => {
         fields: ['likes']
       }
     })
-    console.log('index title ok')
+    await storage.value.createIndex({
+      index: {
+        fields: ['type']
+      }
+    })
+    console.log('index title/likes/type ok')
   } catch (err) {
     console.error('err createIndexes', err)
   }
@@ -360,6 +387,7 @@ const generateFakeDocs = async (nb: number) => {
     const rand = Math.random().toString(36).substring(2, 7)
 
     await storage.value.post({
+      type: 'document',
       title: 'doc ' + rand,
       description: 'description auto ' + rand,
       created_at: new Date().toISOString(),
@@ -370,6 +398,42 @@ const generateFakeDocs = async (nb: number) => {
     })
   }
   fetchData()
+}
+// ajoute une catégory
+const createCategory = async () => {
+  if (!storage.value) return
+
+  const name = newCategoryName.value.trim()
+  if (!name) return
+
+  const cat: CategoryDoc = {
+    type: 'category',
+    name,
+    created_at: new Date().toISOString()
+  }
+
+  try {
+    await storage.value.post(cat)
+    newCategoryName.value = ''
+    fetchData()
+  } catch (err) {
+    console.error('err createCategory', err)
+  }
+}
+
+// suppression d une catégorie
+const deleteCategory = async (cat: CategoryDoc) => {
+  if (!storage.value || !cat._id || !cat._rev) return
+
+  const ok = window.confirm(`supprimer la catégorie « ${cat.name} » ?`)
+  if (!ok) return
+
+  try {
+    await storage.value.remove(cat._id, cat._rev)
+    fetchData()
+  } catch (err) {
+    console.error('err deleteCategory', err)
+  }
 }
 
 // focntion toggle offline/online
@@ -489,6 +553,34 @@ onMounted(() => {
           </button>
         </div>
       </form>
+    </section>
+
+    <section>
+      <h2>Catégories</h2>
+
+      <form @submit.prevent="createCategory">
+        <label>
+          Nom de la catégorie
+          <input type="text" v-model="newCategoryName" placeholder="ex: urgent, marketing, etc." />
+        </label>
+        <button type="submit">
+          Ajouter
+        </button>
+      </form>
+
+      <ul v-if="categories.length">
+        <li v-for="cat in categories" :key="cat._id">
+          {{ cat.name }}
+          <small>
+            · créé le {{ new Date(cat.created_at).toLocaleString() }}
+          </small>
+          <button type="button" @click="deleteCategory(cat)">
+            Supprimer
+          </button>
+        </li>
+      </ul>
+
+      <p v-else>Aucune catégorie pour l’instant.</p>
     </section>
 
     <!-- liste des docs -->
