@@ -8,7 +8,10 @@ PouchDB.plugin(PouchDBFind)
 
 // type de doc dans la bd (avec ajout des comm et likes)
 interface CommentDoc {
-  id: string
+  _id?: string
+  _rev?: string
+  type: 'comment'
+  messageId: string
   text: string
   author: string
   created_at: string
@@ -24,25 +27,14 @@ interface InfradonDoc {
   status: string
   author: string
   likes?: number
-  comments?: CommentDoc[]
-}
-
-// category
-interface CategoryDoc {
-  _id?: string
-  _rev?: string
-  type: 'category'
-  name: string
-  created_at: string
 }
 
 // refs pour la bd + ui
-const storage = ref<any>(null) // osef des types generiques ici
+const messagesDB = ref<any>(null)
+const commentsDB = ref<any>(null)
 const docs = ref<InfradonDoc[]>([])
 const formTitle = ref('')
 const formDescription = ref('')
-const categories = ref<CategoryDoc[]>([])
-const newCategoryName = ref('')
 const selectedDoc = ref<InfradonDoc | null>(null)
 const deletingIds = ref<Set<string>>(new Set())
 const searchTerm = ref('')
@@ -52,79 +44,103 @@ const commentDrafts = ref<{ [key: string]: string }>({})
 
 // init de la base (local + remote + sync)
 const initDatabase = () => {
-  console.log('init base infradon2')
+  console.log('init base infradon2 (messages + comments)')
 
-  // base locale dans le navigateur
-  const localDB = new PouchDB('test_infradon2_local')
+  // --- MESSAGES
+  const localMessages = new PouchDB('test_infradon2_messages_local')
+  const remoteMessages = new PouchDB('http://admin:admin@127.0.0.1:5984/test_infradon2_messages')
 
-  // base distante couchdb
-  const remoteDB = new PouchDB('http://admin:admin@127.0.0.1:5984/test_infradon2')
+  localMessages.replicate
+    .from(remoteMessages)
+    .on('complete', () => console.log('replicate ok messages (remote -> local)'))
+    .on('error', (err: any) => console.error('err replicate messages', err))
 
-  // premier "pull" remote -> local
-  localDB
-    .replicate
-    .from(remoteDB)
-    .on('complete', () => {
-      console.log('replicate ok (remote -> local)')
-    })
-    .on('error', (err: any) => {
-      console.error('err replicate', err)
-    })
+  const syncMessages = localMessages.sync(remoteMessages, { live: true, retry: true })
+  syncMessages
+    .on('change', () => fetchData())
+    .on('error', (err: any) => console.error('sync messages err', err))
 
-  // sync en continu local <-> remote
-  const sync = localDB.sync(remoteDB, { live: true, retry: true })
+  // --- COMMENTS
+  const localComments = new PouchDB('test_infradon2_comments_local')
+  const remoteComments = new PouchDB('http://admin:admin@127.0.0.1:5984/test_infradon2_comments')
 
-  sync
-    .on('change', (info: any) => {
-      console.log('sync change', info)
-      fetchData()
-    })
-    .on('paused', (err: any) => {
-      if (err) console.warn('sync paused', err)
-    })
-    .on('active', () => {
-      console.log('sync active')
-    })
-    .on('error', (err: any) => {
-      console.error('sync err', err)
-    })
+  localComments.replicate
+    .from(remoteComments)
+    .on('complete', () => console.log('replicate ok comments (remote -> local)'))
+    .on('error', (err: any) => console.error('err replicate comments', err))
 
-  syncHandler.value = sync
+  const syncComments = localComments.sync(remoteComments, { live: true, retry: true })
+  syncComments
+    .on('change', () => fetchData())
+    .on('error', (err: any) => console.error('sync comments err', err))
 
-  // on garde la base locale pour la suite
-  storage.value = localDB
+  // handlers (pour offline toggle)
+  syncHandler.value = { syncMessages, syncComments }
+
+  // refs accessibles partout
+  messagesDB.value = localMessages
+  commentsDB.value = localComments
+
   createIndexes()
+  fetchData()
 }
 
 // recup de tous les docs
-const fetchData = () => {
-  if (!storage.value) return
+const fetchData = async () => {
+  if (!messagesDB.value || !commentsDB.value) return
 
-  storage.value
-    .allDocs({ include_docs: true })
-    .then((res: any) => {
-      const allDocs = res.rows
-        .filter((r: any) => r.doc && !String(r.id).startsWith('_design/'))
-        .map((r: any) => r.doc as any)
+  try {
+    // messages
+    const res = await messagesDB.value.allDocs({ include_docs: true })
+    const all = res.rows
+      .filter((r: any) => r.doc && !String(r.id).startsWith('_design/'))
+      .map((r: any) => r.doc)
 
-      docs.value = allDocs.filter(
-        (d: any) => !d.type || d.type === 'document'
-      ) as InfradonDoc[]
+    docs.value = all.filter((d: any) => d.type === 'document') as InfradonDoc[]
 
-      categories.value = allDocs.filter(
-        (d: any) => d.type === 'category'
-      ) as CategoryDoc[]
+    // pour chaque message -> charger ses commentaires
+    for (const d of docs.value) {
+      if (!d._id) continue
+      await loadCommentsForMessage(d._id)
+    }
 
-      console.log('nb docs:', docs.value.length, ' | nb categories:', categories.value.length)
+    console.log('nb docs:', docs.value.length)
+  } catch (err) {
+    console.error('err fetchData', err)
+  }
+}
+
+const commentsByMessage = ref<Record<string, CommentDoc[]>>({})
+
+const getComments = (messageId?: string) => {
+  if (!messageId) return []
+  return commentsByMessage.value[messageId] ?? []
+}
+
+const loadCommentsForMessage = async (messageId: string) => {
+  if (!commentsDB.value) return
+
+  try {
+    const res = await commentsDB.value.find({
+      selector: { type: 'comment', messageId },
+      sort: ['created_at']
     })
-    .catch((err: any) => {
-      console.error('err fetchData', err)
-    })
+    commentsByMessage.value[messageId] = res.docs as CommentDoc[]
+  } catch (err) {
+    try {
+      const res2 = await commentsDB.value.find({
+        selector: { type: 'comment', messageId }
+      })
+      commentsByMessage.value[messageId] = res2.docs as CommentDoc[]
+    } catch (e2) {
+      console.error('err loadCommentsForMessage', err, e2)
+    }
+  }
 }
 
 // creation d un doc
 const createDoc = () => {
-  if (!storage.value) return
+  if (!messagesDB.value) return
 
   const newDoc: InfradonDoc = {
     type: 'document',
@@ -133,21 +149,19 @@ const createDoc = () => {
     created_at: new Date().toISOString(),
     status: 'draft',
     author: 'Marc Bridy',
-    likes: 0,
-    comments: []
+    likes: 0
   }
 
-  storage.value
+  messagesDB.value
     .post(newDoc)
     .then(() => {
       formTitle.value = ''
       formDescription.value = ''
       fetchData()
     })
-    .catch((err: any) => {
-      console.error('err createDoc', err)
-    })
+    .catch((err: any) => console.error('err createDoc', err))
 }
+
 
 // selection d un doc pour edition
 const selectDoc = (doc: InfradonDoc) => {
@@ -159,7 +173,7 @@ const selectDoc = (doc: InfradonDoc) => {
 
 // maj d un doc
 const updateDoc = () => {
-  if (!storage.value || !selectedDoc.value) {
+  if (!messagesDB.value || !selectedDoc.value) {
     console.warn('pas de doc sélectionné')
     return
   }
@@ -171,7 +185,7 @@ const updateDoc = () => {
     status: 'updated'
   }
 
-  storage.value
+  messagesDB.value
     .put(updatedDoc)
     .then(() => {
       selectedDoc.value = null
@@ -186,7 +200,7 @@ const updateDoc = () => {
 
 // suppression d un doc
 const deleteDoc = async (doc: InfradonDoc) => {
-  if (!storage.value) return
+  if (!messagesDB.value) return
   if (!doc._id || !doc._rev) {
     console.warn('doc sans id/rev => pas delete')
     return
@@ -205,7 +219,7 @@ const deleteDoc = async (doc: InfradonDoc) => {
       formDescription.value = ''
     }
 
-    await storage.value.remove(doc._id, doc._rev)
+    await messagesDB.value.remove(doc._id, doc._rev)
     console.log('doc supprimé:', doc._id)
     await fetchData()
   } catch (err) {
@@ -218,33 +232,32 @@ const deleteDoc = async (doc: InfradonDoc) => {
 
 // creation index pour la recherche
 const createIndexes = async () => {
-  if (!storage.value) return
-
   try {
-    await storage.value.createIndex({
-      index: {
-        fields: ['title']
-      }
-    })
-    await storage.value.createIndex({
-      index: {
-        fields: ['likes']
-      }
-    })
-    await storage.value.createIndex({
-      index: {
-        fields: ['type']
-      }
-    })
-    console.log('index title/likes/type ok')
+    // --- messages
+    if (messagesDB.value) {
+      await messagesDB.value.createIndex({ index: { fields: ['title'] } })
+      await messagesDB.value.createIndex({ index: { fields: ['likes'] } })
+      await messagesDB.value.createIndex({ index: { fields: ['type'] } })
+    }
+
+    // --- comments
+    if (commentsDB.value) {
+      await commentsDB.value.createIndex({ index: { fields: ['type'] } })
+      await commentsDB.value.createIndex({ index: { fields: ['messageId'] } })
+      await commentsDB.value.createIndex({ index: { fields: ['messageId', 'created_at'] } })
+      await commentsDB.value.createIndex({ index: { fields: ['created_at'] } })
+    }
+
+    console.log('index ok (messages + comments)')
   } catch (err) {
     console.error('err createIndexes', err)
   }
 }
 
+
 // recherche par titre (pouchdb-find)
 const searchDocs = async () => {
-  if (!storage.value) return
+  if (!messagesDB.value) return
 
   const term = searchTerm.value.trim()
 
@@ -255,7 +268,7 @@ const searchDocs = async () => {
   }
 
   try {
-    const res = await storage.value.find({
+    const res = await messagesDB.value.find({
       selector: {
         title: { $regex: new RegExp(term, 'i') }
       },
@@ -270,7 +283,7 @@ const searchDocs = async () => {
 }
 // incérmenter le compteur de likes
 const likeDoc = async (doc: InfradonDoc) => {
-  if (!storage.value || !doc._id || !doc._rev) return
+  if (!messagesDB.value || !doc._id || !doc._rev) return
 
   const updated: InfradonDoc = {
     ...doc,
@@ -278,7 +291,7 @@ const likeDoc = async (doc: InfradonDoc) => {
   }
 
   try {
-    await storage.value.put(updated)
+    await messagesDB.value.put(updated)
     fetchData()
   } catch (err) {
     console.error('err likeDoc', err)
@@ -286,107 +299,90 @@ const likeDoc = async (doc: InfradonDoc) => {
 }
 
 const addComment = async (doc: InfradonDoc) => {
-  if (!storage.value || !doc._id || !doc._rev) return
+  if (!commentsDB.value || !doc._id) return
 
   const key = doc._id
   const txt = commentDrafts.value[key] || ''
-
   if (!txt.trim()) return
 
   const newComment: CommentDoc = {
-    id: Math.random().toString(36).substring(2, 9),
-    text: txt,
-    author: 'anonyme', // on a pas de gestion des users
+    type: 'comment',
+    messageId: doc._id,
+    text: txt.trim(),
+    author: 'anonyme',
     created_at: new Date().toISOString()
   }
 
-  const oldComments = doc.comments || []
-
-  const updated: InfradonDoc = {
-    ...doc,
-    comments: [...oldComments, newComment]
-  }
-
   try {
-    await storage.value.put(updated)
+    await commentsDB.value.post(newComment)
     commentDrafts.value[key] = ''
-    fetchData()
+    await loadCommentsForMessage(doc._id)
   } catch (err) {
     console.error('err addComment', err)
   }
 }
 
+
 // suppr un commmentaire
-const deleteComment = async (doc: InfradonDoc, commentId: string) => {
-  if (!storage.value || !doc._id || !doc._rev) return
-
-  const oldComments = doc.comments || []
-  const newComments = oldComments.filter(c => c.id !== commentId)
-
-  const updated: InfradonDoc = {
-    ...doc,
-    comments: newComments
-  }
+const deleteComment = async (comment: CommentDoc) => {
+  if (!commentsDB.value || !comment._id || !comment._rev) return
 
   try {
-    await storage.value.put(updated)
-    fetchData()
+    await commentsDB.value.remove(comment._id, comment._rev)
+    await loadCommentsForMessage(comment.messageId)
   } catch (err) {
     console.error('err deleteComment', err)
   }
 }
 
 // edit commentaire
-const editComment = async (doc: InfradonDoc, comment: CommentDoc) => {
-  if (!storage.value || !doc._id || !doc._rev) return
+const editComment = async (comment: CommentDoc) => {
+  if (!commentsDB.value || !comment._id || !comment._rev) return
 
   const nv = window.prompt('nouveau texte du commentaire', comment.text)
   if (nv === null) return
 
-  const oldComments = doc.comments || []
-  const newComments = oldComments.map(c =>
-    c.id === comment.id ? { ...c, text: nv } : c
-  )
-
-  const updated: InfradonDoc = {
-    ...doc,
-    comments: newComments
+  const updated: CommentDoc = {
+    ...comment,
+    text: nv
   }
 
   try {
-    await storage.value.put(updated)
-    fetchData()
+    await commentsDB.value.put(updated)
+    await loadCommentsForMessage(comment.messageId)
   } catch (err) {
     console.error('err editComment', err)
   }
 }
 
+
 // tri par nb de likes
 const sortByLikesDesc = async () => {
-  if (!storage.value) return
+  if (!messagesDB.value) return
 
   try {
-    const res = await (storage.value as any).find({
-      selector: {
-        likes: { $gte: 0 }
-      },
-      sort: [{ likes: 'desc' }]
+    const res = await messagesDB.value.find({
+      selector: { likes: { $gte: 0 }, type: 'document' }
+      // pas de sort ici si ça casse, sinon on trie en JS
     })
 
-    docs.value = res.docs as InfradonDoc[]
+    const arr = res.docs as InfradonDoc[]
+    arr.sort((a, b) => (b.likes || 0) - (a.likes || 0))
+    docs.value = arr
   } catch (err) {
     console.error('err sortByLikesDesc', err)
   }
 }
 
+
 // factory pour générer plein de doc random
 const generateFakeDocs = async (nb: number) => {
-  if (!storage.value) return
+  if (!messagesDB.value) return
 
   for (let i = 0; i < nb; i++) {
     const rand = Math.random().toString(36).substring(2, 7)
 
-    await storage.value.post({
+    await messagesDB.value.post({
       type: 'document',
       title: 'doc ' + rand,
       description: 'description auto ' + rand,
@@ -394,85 +390,32 @@ const generateFakeDocs = async (nb: number) => {
       status: 'auto',
       author: 'N/A',
       likes: 0,
-      comments: []
     })
   }
   fetchData()
 }
-// ajoute une catégory
-const createCategory = async () => {
-  if (!storage.value) return
 
-  const name = newCategoryName.value.trim()
-  if (!name) return
-
-  const cat: CategoryDoc = {
-    type: 'category',
-    name,
-    created_at: new Date().toISOString()
-  }
-
-  try {
-    await storage.value.post(cat)
-    newCategoryName.value = ''
-    fetchData()
-  } catch (err) {
-    console.error('err createCategory', err)
-  }
-}
-
-// suppression d une catégorie
-const deleteCategory = async (cat: CategoryDoc) => {
-  if (!storage.value || !cat._id || !cat._rev) return
-
-  const ok = window.confirm(`supprimer la catégorie « ${cat.name} » ?`)
-  if (!ok) return
-
-  try {
-    await storage.value.remove(cat._id, cat._rev)
-    fetchData()
-  } catch (err) {
-    console.error('err deleteCategory', err)
-  }
-}
 
 // focntion toggle offline/online
 const toggleOffline = async () => {
-  if (!storage.value) return
-
+  // si on est ONLINE -> passer OFFLINE
   if (!isOffline.value) {
     console.log('passage en offline')
 
-    if (syncHandler.value) {
-      syncHandler.value.cancel()
-      syncHandler.value = null
-    }
+    if (syncHandler.value?.syncMessages) syncHandler.value.syncMessages.cancel()
+    if (syncHandler.value?.syncComments) syncHandler.value.syncComments.cancel()
+    syncHandler.value = null
 
     isOffline.value = true
-  } else {
-    console.log('retour en online')
-
-    const remoteDB = new PouchDB('http://admin:admin@127.0.0.1:5984/test_infradon2')
-
-    await storage.value.replicate.from(remoteDB)
-
-    const sync = storage.value.sync(remoteDB, { live: true, retry: true })
-
-    sync
-      .on('change', (info: any) => {
-        console.log('sync change', info)
-        fetchData()
-      })
-      .on('paused', (err: any) => {
-        if (err) console.warn('sync paused', err)
-      })
-      .on('active', () => console.log('sync active'))
-      .on('error', (err: any) => console.error('sync err', err))
-
-    syncHandler.value = sync
-    isOffline.value = false
+    return
   }
+
+  // si on est OFFLINE -> retour ONLINE
+  console.log('retour en online')
+  initDatabase()
+  isOffline.value = false
 }
+
 
 // reset champ de recherche + liste
 const resetSearch = () => {
@@ -484,7 +427,6 @@ const resetSearch = () => {
 onMounted(() => {
   console.log('infradon2 mounted')
   initDatabase()
-  fetchData()
 })
 </script>
 
@@ -555,33 +497,6 @@ onMounted(() => {
       </form>
     </section>
 
-    <section>
-      <h2>Catégories</h2>
-
-      <form @submit.prevent="createCategory">
-        <label>
-          Nom de la catégorie
-          <input type="text" v-model="newCategoryName" placeholder="ex: urgent, marketing, etc." />
-        </label>
-        <button type="submit">
-          Ajouter
-        </button>
-      </form>
-
-      <ul v-if="categories.length">
-        <li v-for="cat in categories" :key="cat._id">
-          {{ cat.name }}
-          <small>
-            · créé le {{ new Date(cat.created_at).toLocaleString() }}
-          </small>
-          <button type="button" @click="deleteCategory(cat)">
-            Supprimer
-          </button>
-        </li>
-      </ul>
-
-      <p v-else>Aucune catégorie pour l’instant.</p>
-    </section>
 
     <!-- liste des docs -->
     <section>
@@ -605,38 +520,34 @@ onMounted(() => {
             </button>
           </p>
 
-          <div v-if="doc.comments && doc.comments.length">
+          <div v-if="getComments(doc._id).length">
             <p><strong>Commentaires:</strong></p>
 
-            <!-- premier commentaire -->
-            <section>
+            <section v-for="first in getComments(doc._id).slice(0, 1)" :key="first._id">
               <h4>Premier commentaire</h4>
               <blockquote>
-                <p>{{ doc.comments![0].text }}</p>
+                <p>{{ first.text }}</p>
                 <footer>
-                  {{ doc.comments![0].author }}
+                  {{ first.author }}
                   ·
-                  {{ new Date(doc.comments![0].created_at).toLocaleString() }}
+                  {{ new Date(first.created_at).toLocaleString() }}
                 </footer>
               </blockquote>
             </section>
 
             <details>
-              <summary>Tous les commentaires ({{ doc.comments.length }})</summary>
+              <summary>Tous les commentaires ({{ getComments(doc._id).length }})</summary>
               <ul>
-                <li v-for="c in doc.comments" :key="c.id">
+                <li v-for="c in getComments(doc._id)" :key="c._id">
                   <span>{{ c.text }}</span>
                   <small> ({{ c.author }})</small>
-                  <button type="button" @click="editComment(doc, c)">
-                    Modifier
-                  </button>
-                  <button type="button" @click="deleteComment(doc, c.id)">
-                    Supprimer
-                  </button>
+                  <button type="button" @click="editComment(c)">Modifier</button>
+                  <button type="button" @click="deleteComment(c)">Supprimer</button>
                 </li>
               </ul>
             </details>
           </div>
+
 
           <div>
             <form @submit.prevent="addComment(doc)">
