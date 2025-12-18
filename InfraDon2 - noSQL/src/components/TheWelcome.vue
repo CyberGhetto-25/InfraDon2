@@ -41,14 +41,42 @@ const searchTerm = ref('')
 const isOffline = ref(false)
 const syncHandler = ref<any>(null) // pour garder le sync et pouvoir le cancel
 const commentDrafts = ref<{ [key: string]: string }>({})
+const topLikedPage = ref(0)
+const topLikedHasNext = ref(false)
+const TOP_LIKED_PAGE_SIZE = 10
+// --- ATTACHMENTS (media)
+const ATTACHMENT_ID = 'media'
+const mediaUrlByDocId = ref<Record<string, string>>({})
+
+const revokeMediaUrl = (docId: string) => {
+  const url = mediaUrlByDocId.value[docId]
+  if (url) {
+    URL.revokeObjectURL(url)
+    delete mediaUrlByDocId.value[docId]
+  }
+}
+
+const ensureRemoteDbExists = async (remoteDb: any) => {
+  try {
+    await remoteDb.info()
+  } catch (err: any) {
+    if (err?.status === 404) {
+      await remoteDb.put({})
+      return
+    }
+    throw err
+  }
+}
+
 
 // init de la base (local + remote + sync)
-const initDatabase = () => {
+const initDatabase = async () => {
   console.log('init base infradon2 (messages + comments)')
 
-  // --- MESSAGES
   const localMessages = new PouchDB('test_infradon2_messages_local')
-  const remoteMessages = new PouchDB('http://admin:admin@127.0.0.1:5984/test_infradon2_messages')
+  const remoteMessages = new PouchDB('http://admin:admin@127.0.0.1:5984/messages_bridy_marc')
+
+  await ensureRemoteDbExists(remoteMessages)
 
   localMessages.replicate
     .from(remoteMessages)
@@ -60,9 +88,10 @@ const initDatabase = () => {
     .on('change', () => fetchData())
     .on('error', (err: any) => console.error('sync messages err', err))
 
-  // --- COMMENTS
   const localComments = new PouchDB('test_infradon2_comments_local')
-  const remoteComments = new PouchDB('http://admin:admin@127.0.0.1:5984/test_infradon2_comments')
+  const remoteComments = new PouchDB('http://admin:admin@127.0.0.1:5984/comments_bridy_marc')
+
+  await ensureRemoteDbExists(remoteComments)
 
   localComments.replicate
     .from(remoteComments)
@@ -74,16 +103,15 @@ const initDatabase = () => {
     .on('change', () => fetchData())
     .on('error', (err: any) => console.error('sync comments err', err))
 
-  // handlers (pour offline toggle)
   syncHandler.value = { syncMessages, syncComments }
 
-  // refs accessibles partout
   messagesDB.value = localMessages
   commentsDB.value = localComments
 
-  createIndexes()
-  fetchData()
+  await createIndexes()
+  await fetchData()
 }
+
 
 // recup de tous les docs
 const fetchData = async () => {
@@ -97,11 +125,15 @@ const fetchData = async () => {
       .map((r: any) => r.doc)
 
     docs.value = all.filter((d: any) => d.type === 'document') as InfradonDoc[]
+    for (const d of docs.value) {
+      if (d._id) loadMediaPreview(d._id)
+    }
 
-    // pour chaque message -> charger ses commentaires
+    // pour chaque message -> charger uniquement le dernier commentaire
     for (const d of docs.value) {
       if (!d._id) continue
-      await loadCommentsForMessage(d._id)
+      await loadCommentsCountForMessage(d._id)
+      await loadLastCommentForMessage(d._id)
     }
 
     console.log('nb docs:', docs.value.length)
@@ -110,12 +142,117 @@ const fetchData = async () => {
   }
 }
 
+const normalizeLikesInDb = async () => {
+  if (!messagesDB.value) return
+
+  try {
+    const res = await messagesDB.value.allDocs({ include_docs: true })
+
+    const docsToFix = res.rows
+      .filter((r: any) => r.doc && !String(r.id).startsWith('_design/'))
+      .map((r: any) => r.doc)
+      .filter((d: any) => d.type === 'document')
+
+    for (const d of docsToFix) {
+      const raw = d.likes
+
+      const shouldFix =
+        raw === undefined ||
+        raw === null ||
+        typeof raw === 'string' ||
+        Number.isNaN(Number(raw))
+
+      if (!shouldFix) continue
+
+      const fixed = {
+        ...d,
+        likes: Math.max(0, Number(raw ?? 0))
+      }
+
+      await messagesDB.value.put(fixed)
+    }
+
+    console.log('normalizeLikesInDb done')
+  } catch (err) {
+    console.error('err normalizeLikesInDb', err)
+  }
+}
+
+const fetchTopLiked = async () => {
+  if (!messagesDB.value) return
+
+  try {
+    const res = await messagesDB.value.find({
+      selector: {
+        type: 'document',
+        likes: { $gt: 0 }
+      },
+      sort: [{ likes: 'desc' }],
+      limit: TOP_LIKED_PAGE_SIZE + 1,
+      skip: topLikedPage.value * TOP_LIKED_PAGE_SIZE
+    })
+
+    const arr = res.docs as InfradonDoc[]
+    topLikedHasNext.value = arr.length > TOP_LIKED_PAGE_SIZE
+    docs.value = arr.slice(0, TOP_LIKED_PAGE_SIZE)
+  } catch (err) {
+    console.error('err fetchTopLiked', err)
+  }
+}
+
+
 const commentsByMessage = ref<Record<string, CommentDoc[]>>({})
+const lastCommentByMessageId = ref<Record<string, CommentDoc | null>>({})
+const commentsCountByMessageId = ref<Record<string, number>>({})
+
 
 const getComments = (messageId?: string) => {
   if (!messageId) return []
   return commentsByMessage.value[messageId] ?? []
 }
+
+const loadLastCommentForMessage = async (messageId: string) => {
+  if (!commentsDB.value) return
+
+  try {
+    const count = commentsCountByMessageId.value[messageId] ?? 0
+
+    if (count <= 0) {
+      lastCommentByMessageId.value[messageId] = null
+      return
+    }
+
+    const res = await commentsDB.value.find({
+      use_index: ['idx_comment_time', 'by_type_message_time'],
+      selector: { type: 'comment', messageId },
+      sort: [{ type: 'asc' }, { messageId: 'asc' }, { created_at: 'asc' }],
+      limit: 1,
+      skip: count - 1
+    })
+
+    lastCommentByMessageId.value[messageId] = (res.docs?.[0] as CommentDoc) ?? null
+  } catch (err) {
+    console.error('err loadLastCommentForMessage', err)
+    lastCommentByMessageId.value[messageId] = null
+  }
+}
+
+
+const loadCommentsCountForMessage = async (messageId: string) => {
+  if (!commentsDB.value) return
+
+  try {
+    const res = await commentsDB.value.find({
+      selector: { type: 'comment', messageId },
+      fields: ['_id']
+    })
+    commentsCountByMessageId.value[messageId] = res.docs.length
+  } catch (err) {
+    console.error('err loadCommentsCountForMessage', err)
+    commentsCountByMessageId.value[messageId] = 0
+  }
+}
+
 
 const loadCommentsForMessage = async (messageId: string) => {
   if (!commentsDB.value) return
@@ -236,16 +373,26 @@ const createIndexes = async () => {
     // --- messages
     if (messagesDB.value) {
       await messagesDB.value.createIndex({ index: { fields: ['title'] } })
-      await messagesDB.value.createIndex({ index: { fields: ['likes'] } })
       await messagesDB.value.createIndex({ index: { fields: ['type'] } })
+      await messagesDB.value.createIndex({
+        ddoc: 'idx_type_likes',
+        name: 'type_likes',
+        index: { fields: ['type', 'likes'] }
+      })
     }
+
 
     // --- comments
     if (commentsDB.value) {
       await commentsDB.value.createIndex({ index: { fields: ['type'] } })
       await commentsDB.value.createIndex({ index: { fields: ['messageId'] } })
-      await commentsDB.value.createIndex({ index: { fields: ['messageId', 'created_at'] } })
+      await commentsDB.value.createIndex({ index: { fields: ['type', 'messageId', 'created_at'] } })
       await commentsDB.value.createIndex({ index: { fields: ['created_at'] } })
+      await commentsDB.value.createIndex({
+        ddoc: 'idx_comment_time',
+        name: 'by_type_message_time',
+        index: { fields: ['type', 'messageId', 'created_at'] }
+      })
     }
 
     console.log('index ok (messages + comments)')
@@ -253,6 +400,7 @@ const createIndexes = async () => {
     console.error('err createIndexes', err)
   }
 }
+
 
 
 // recherche par titre (pouchdb-find)
@@ -270,7 +418,7 @@ const searchDocs = async () => {
   try {
     const res = await messagesDB.value.find({
       selector: {
-        title: { $regex: new RegExp(term, 'i') }
+        title: { $regex: term }
       },
       sort: ['title']
     })
@@ -287,16 +435,73 @@ const likeDoc = async (doc: InfradonDoc) => {
 
   const updated: InfradonDoc = {
     ...doc,
-    likes: (doc.likes || 0) + 1
+    likes: Number(doc.likes ?? 0) + 1
   }
 
   try {
-    await messagesDB.value.put(updated)
+    const res = await messagesDB.value.put(updated)
+    doc._rev = res.rev
+    doc.likes = updated.likes
     fetchData()
   } catch (err) {
     console.error('err likeDoc', err)
   }
 }
+
+
+const loadMediaPreview = async (docId: string) => {
+  if (!messagesDB.value) return
+
+  try {
+    const blob = await messagesDB.value.getAttachment(docId, ATTACHMENT_ID)
+    if (!blob) return
+
+    revokeMediaUrl(docId)
+    mediaUrlByDocId.value[docId] = URL.createObjectURL(blob)
+  } catch {
+    // pas d’attachment => rien
+    revokeMediaUrl(docId)
+  }
+}
+
+const addMediaToDoc = async (doc: InfradonDoc, file: File) => {
+  if (!messagesDB.value) return
+  if (!doc._id) return
+
+  try {
+    const res = await messagesDB.value.putAttachment(
+      doc._id,
+      ATTACHMENT_ID,
+      doc._rev, // important
+      file,     // File est un Blob
+      file.type || 'application/octet-stream'
+    )
+
+    // MAJ rev local pour éviter les conflits tout de suite après
+    doc._rev = res.rev
+
+    await loadMediaPreview(doc._id)
+    await fetchData()
+  } catch (err) {
+    console.error('err addMediaToDoc', err)
+  }
+}
+
+const removeMediaFromDoc = async (doc: InfradonDoc) => {
+  if (!messagesDB.value) return
+  if (!doc._id || !doc._rev) return
+
+  try {
+    const res = await messagesDB.value.removeAttachment(doc._id, ATTACHMENT_ID, doc._rev)
+    doc._rev = res.rev
+
+    revokeMediaUrl(doc._id)
+    await fetchData()
+  } catch (err) {
+    console.error('err removeMediaFromDoc', err)
+  }
+}
+
 
 const addComment = async (doc: InfradonDoc) => {
   if (!commentsDB.value || !doc._id) return
@@ -317,6 +522,8 @@ const addComment = async (doc: InfradonDoc) => {
     await commentsDB.value.post(newComment)
     commentDrafts.value[key] = ''
     await loadCommentsForMessage(doc._id)
+    await loadLastCommentForMessage(doc._id)
+    await loadCommentsCountForMessage(doc._id)
   } catch (err) {
     console.error('err addComment', err)
   }
@@ -330,6 +537,8 @@ const deleteComment = async (comment: CommentDoc) => {
   try {
     await commentsDB.value.remove(comment._id, comment._rev)
     await loadCommentsForMessage(comment.messageId)
+    await loadLastCommentForMessage(comment.messageId)
+    await loadCommentsCountForMessage(comment.messageId)
   } catch (err) {
     console.error('err deleteComment', err)
   }
@@ -350,6 +559,7 @@ const editComment = async (comment: CommentDoc) => {
   try {
     await commentsDB.value.put(updated)
     await loadCommentsForMessage(comment.messageId)
+    await loadLastCommentForMessage(comment.messageId)
   } catch (err) {
     console.error('err editComment', err)
   }
@@ -424,10 +634,13 @@ const resetSearch = () => {
 }
 
 // init au chargement du composant
-onMounted(() => {
+onMounted(async () => {
   console.log('infradon2 mounted')
-  initDatabase()
+  await initDatabase()
+  await normalizeLikesInDb()
+  await fetchData()
 })
+
 </script>
 
 <template>
@@ -497,6 +710,26 @@ onMounted(() => {
       </form>
     </section>
 
+    <section class="top-actions">
+      <button type="button" @click="topLikedPage = 0; fetchTopLiked()">
+        Top 10
+      </button>
+
+      <button type="button" @click="topLikedPage = Math.max(0, topLikedPage - 1); fetchTopLiked()"
+        :disabled="topLikedPage === 0">
+        < </button>
+
+          <button type="button" @click="topLikedPage++; fetchTopLiked()" :disabled="!topLikedHasNext">
+            >
+          </button>
+
+          <button type="button" @click="fetchData()">
+            Tous les documents
+          </button>
+    </section>
+
+
+
 
     <!-- liste des docs -->
     <section>
@@ -515,29 +748,53 @@ onMounted(() => {
           </header>
 
           <p>
-            <button type="button" @click="likeDoc(doc)">
-              Like ({{ doc.likes || 0 }})
+            <button type="button" @click="likeDoc(doc)" class="like-btn" :class="{ liked: (doc.likes ?? 0) > 0 }">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" aria-label="like">
+                <path
+                  d="M12.1 8.64l-.1.1-.11-.11C10.14 6.6 7.1 6.6 5.14 8.57c-1.96 1.97-1.96 5.16 0 7.13L12 22.56l6.86-6.86c1.96-1.97 1.96-5.16 0-7.13-1.97-1.97-5.02-1.97-6.76.07z"
+                  fill="currentColor" />
+              </svg>
+
+              <span>{{ doc.likes ?? 0 }}</span>
             </button>
           </p>
 
-          <div v-if="getComments(doc._id).length">
+          <section v-if="doc._id" style="margin-top: 0.75rem;">
+            <div v-if="mediaUrlByDocId[doc._id]">
+              <p><strong>Média :</strong></p>
+              <img :src="mediaUrlByDocId[doc._id]" alt="media" style="max-width: 260px; display:block;" />
+              <button type="button" @click="removeMediaFromDoc(doc)">Supprimer le média</button>
+            </div>
+
+            <div v-else>
+              <label>
+                Ajouter un média
+                <input type="file" accept="image/*"
+                  @change="(e: any) => { const f = e?.target?.files?.[0]; if (f) addMediaToDoc(doc, f) }" />
+              </label>
+            </div>
+          </section>
+
+          <div>
             <p><strong>Commentaires:</strong></p>
 
-            <section v-for="first in getComments(doc._id).slice(0, 1)" :key="first._id">
-              <h4>Premier commentaire</h4>
+            <section v-if="doc._id && lastCommentByMessageId[doc._id]">
+              <h4>Dernier commentaire</h4>
               <blockquote>
-                <p>{{ first.text }}</p>
+                <p>{{ lastCommentByMessageId[doc._id]?.text }}</p>
                 <footer>
-                  {{ first.author }}
+                  {{ lastCommentByMessageId[doc._id]?.author }}
                   ·
-                  {{ new Date(first.created_at).toLocaleString() }}
+                  {{ new Date(lastCommentByMessageId[doc._id]?.created_at || '').toLocaleString() }}
                 </footer>
               </blockquote>
             </section>
 
-            <details>
-              <summary>Tous les commentaires ({{ getComments(doc._id).length }})</summary>
-              <ul>
+
+            <details @toggle="(e: any) => { if (e.target?.open && doc._id) loadCommentsForMessage(doc._id) }">
+              <summary>Tous les commentaires ({{ doc._id ? (commentsCountByMessageId[doc._id] ?? 0) : 0 }})</summary>
+
+              <ul v-if="getComments(doc._id).length">
                 <li v-for="c in getComments(doc._id)" :key="c._id">
                   <span>{{ c.text }}</span>
                   <small> ({{ c.author }})</small>
@@ -545,6 +802,10 @@ onMounted(() => {
                   <button type="button" @click="deleteComment(c)">Supprimer</button>
                 </li>
               </ul>
+
+              <p v-else style="opacity: 0.7; margin-top: 0.5rem;">
+                Ouvre pour charger les commentaires…
+              </p>
             </details>
           </div>
 
